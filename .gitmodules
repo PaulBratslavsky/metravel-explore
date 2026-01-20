@@ -1,0 +1,3 @@
+[submodule "plugins/strapi-plugin-map-box"]
+	path = plugins/strapi-plugin-map-box
+	url = https://github.com/PaulBratslavsky/strapi-plugin-map-box.git
