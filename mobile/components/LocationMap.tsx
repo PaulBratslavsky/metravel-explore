@@ -1,4 +1,4 @@
-import Mapbox, { Camera, MapView, PointAnnotation } from '@rnmapbox/maps';
+import Mapbox, { Camera, MapView, PointAnnotation, ShapeSource, FillLayer, LineLayer, LocationPuck, Callout } from '@rnmapbox/maps';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -44,11 +44,51 @@ const sanitizeLocation = (location: Partial<MapLocation>): MapLocation => ({
   address: location?.address,
 });
 
+/**
+ * Generate a GeoJSON circle polygon for radius overlay
+ */
+function createCircleGeoJSON(
+  center: [number, number],
+  radiusMiles: number,
+  points = 64
+): GeoJSON.Feature<GeoJSON.Polygon> {
+  const radiusKm = radiusMiles * 1.60934;
+  const coords: [number, number][] = [];
+
+  for (let i = 0; i <= points; i++) {
+    const angle = (i / points) * 2 * Math.PI;
+    const dx = radiusKm * Math.cos(angle);
+    const dy = radiusKm * Math.sin(angle);
+
+    // Convert km offset to degrees
+    const lat = center[1] + (dy / 111.32);
+    const lng = center[0] + (dx / (111.32 * Math.cos(center[1] * (Math.PI / 180))));
+    coords.push([lng, lat]);
+  }
+
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'Polygon',
+      coordinates: [coords],
+    },
+  };
+}
+
 type SearchResult = {
   id: string;
   place_name: string;
   center: [number, number];
   place_type: string[];
+};
+
+export type MapMarker = {
+  id: string;
+  longitude: number;
+  latitude: number;
+  name: string;
+  address?: string;
 };
 
 type LocationMapProps = {
@@ -60,6 +100,27 @@ type LocationMapProps = {
   onLocationChange?: (location: MapLocation) => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  radiusMiles?: number;
+  showControls?: boolean;
+  showUserLocation?: boolean;
+  markers?: MapMarker[];
+  onMarkerSelect?: (marker: MapMarker) => void;
+};
+
+/**
+ * Calculate appropriate zoom level to fit a radius in miles
+ * Returns zoom level that shows the full circle with some padding
+ */
+function getZoomForRadius(radiusMiles: number): number {
+  // Approximate: zoom 10 ~ 10 miles, each zoom level halves the distance
+  // For 5 miles, zoom ~11 works well
+  const baseZoom = 10;
+  const baseMiles = 10;
+  return baseZoom + Math.log2(baseMiles / radiusMiles);
+}
+
+export type LocationMapRef = {
+  flyTo: (coords: { longitude: number; latitude: number; zoom?: number }) => void;
 };
 
 export function LocationMap({
@@ -71,13 +132,73 @@ export function LocationMap({
   onLocationChange,
   onRefresh,
   isRefreshing = false,
-}: LocationMapProps) {
+  radiusMiles,
+  showControls = false,
+  showUserLocation = false,
+  markers = [],
+  onMarkerSelect,
+  mapRef,
+}: LocationMapProps & { mapRef?: React.RefObject<LocationMapRef | null> }) {
   const cameraRef = useRef<Camera>(null);
+  const [currentZoom, setCurrentZoom] = useState(location.zoom);
+
+  // Expose flyTo method via ref
+  useEffect(() => {
+    if (mapRef && 'current' in mapRef) {
+      (mapRef as React.MutableRefObject<LocationMapRef | null>).current = {
+        flyTo: ({ longitude, latitude, zoom }) => {
+          cameraRef.current?.setCamera({
+            centerCoordinate: [longitude, latitude],
+            zoomLevel: zoom ?? 14,
+            animationDuration: 1000,
+          });
+          if (zoom) setCurrentZoom(zoom);
+        },
+      };
+    }
+  }, [mapRef]);
+
+  const handleZoomIn = useCallback(() => {
+    const newZoom = Math.min(currentZoom + 1, 20);
+    setCurrentZoom(newZoom);
+    cameraRef.current?.setCamera({
+      zoomLevel: newZoom,
+      animationDuration: 300,
+    });
+  }, [currentZoom]);
+
+  const handleZoomOut = useCallback(() => {
+    const newZoom = Math.max(currentZoom - 1, 1);
+    setCurrentZoom(newZoom);
+    cameraRef.current?.setCamera({
+      zoomLevel: newZoom,
+      animationDuration: 300,
+    });
+  }, [currentZoom]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(() => sanitizeLocation(location));
+
+  const handleRecenter = useCallback(() => {
+    const zoom = radiusMiles ? getZoomForRadius(radiusMiles) : currentLocation.zoom;
+    cameraRef.current?.setCamera({
+      centerCoordinate: [currentLocation.longitude, currentLocation.latitude],
+      zoomLevel: zoom,
+      animationDuration: 500,
+    });
+    setCurrentZoom(zoom);
+  }, [currentLocation, radiusMiles]);
+
+  // Calculate zoom to fit radius if provided
+  const effectiveZoom = radiusMiles ? getZoomForRadius(radiusMiles) : currentLocation.zoom;
+
+  // Generate circle GeoJSON for radius overlay
+  const circleGeoJSON = radiusMiles
+    ? createCircleGeoJSON([currentLocation.longitude, currentLocation.latitude], radiusMiles)
+    : null;
 
   // Sync with prop changes
   useEffect(() => {
@@ -177,10 +298,29 @@ export function LocationMap({
         <Camera
           ref={cameraRef}
           centerCoordinate={[currentLocation.longitude, currentLocation.latitude]}
-          zoomLevel={currentLocation.zoom}
+          zoomLevel={effectiveZoom}
           pitch={currentLocation.pitch}
           heading={currentLocation.bearing}
         />
+        {circleGeoJSON && (
+          <ShapeSource id="radius-circle" shape={circleGeoJSON}>
+            <FillLayer
+              id="radius-fill"
+              style={{
+                fillColor: 'rgba(0, 122, 255, 0.1)',
+                fillOutlineColor: 'rgba(0, 122, 255, 0.5)',
+              }}
+            />
+            <LineLayer
+              id="radius-line"
+              style={{
+                lineColor: 'rgba(0, 122, 255, 0.6)',
+                lineWidth: 2,
+                lineDasharray: [2, 2],
+              }}
+            />
+          </ShapeSource>
+        )}
         {showMarker && (
           <PointAnnotation
             id="location-marker"
@@ -190,7 +330,55 @@ export function LocationMap({
             <View style={styles.marker} />
           </PointAnnotation>
         )}
+        {markers.map((marker) => (
+          <PointAnnotation
+            key={marker.id}
+            id={`marker-${marker.id}`}
+            coordinate={[marker.longitude, marker.latitude]}
+            onSelected={() => onMarkerSelect?.(marker)}
+          >
+            <View style={styles.savedMarker}>
+              <Ionicons name="location" size={12} color="#FFFFFF" />
+            </View>
+            <Callout title={marker.name}>
+              <View style={styles.calloutContainer}>
+                <Text style={styles.calloutTitle}>{marker.name}</Text>
+                {marker.address && (
+                  <Text style={styles.calloutAddress} numberOfLines={2}>
+                    {marker.address}
+                  </Text>
+                )}
+              </View>
+            </Callout>
+          </PointAnnotation>
+        ))}
+        {showUserLocation && <LocationPuck puckBearing="heading" puckBearingEnabled />}
       </MapView>
+
+      {showControls && (
+        <View style={styles.controlsContainer}>
+          <Pressable
+            style={({ pressed }) => [styles.controlButton, pressed && styles.controlButtonPressed]}
+            onPress={handleZoomIn}
+          >
+            <Ionicons name="add" size={24} color="#000" />
+          </Pressable>
+          <View style={styles.controlDivider} />
+          <Pressable
+            style={({ pressed }) => [styles.controlButton, pressed && styles.controlButtonPressed]}
+            onPress={handleZoomOut}
+          >
+            <Ionicons name="remove" size={24} color="#000" />
+          </Pressable>
+          <View style={styles.controlSpacer} />
+          <Pressable
+            style={({ pressed }) => [styles.controlButton, styles.recenterButton, pressed && styles.controlButtonPressed]}
+            onPress={handleRecenter}
+          >
+            <Ionicons name="locate" size={22} color="#007AFF" />
+          </Pressable>
+        </View>
+      )}
 
       {searchable && (
         <View style={styles.searchContainer}>
@@ -325,6 +513,36 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
+  savedMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#FF3B30',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3,
+  },
+  calloutContainer: {
+    padding: 8,
+    minWidth: 120,
+    maxWidth: 200,
+  },
+  calloutTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  calloutAddress: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 2,
+  },
   searchContainer: {
     position: 'absolute',
     top: Platform.OS === 'ios' ? 60 : 16,
@@ -432,5 +650,38 @@ const styles = StyleSheet.create({
   resultSubtext: {
     fontSize: 13,
     color: '#8E8E93',
+  },
+  controlsContainer: {
+    position: 'absolute',
+    right: 16,
+    top: Platform.OS === 'ios' ? 120 : 76,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  controlButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlButtonPressed: {
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+  },
+  controlDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(60, 60, 67, 0.2)',
+    marginHorizontal: 8,
+  },
+  controlSpacer: {
+    height: 8,
+  },
+  recenterButton: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(60, 60, 67, 0.2)',
   },
 });

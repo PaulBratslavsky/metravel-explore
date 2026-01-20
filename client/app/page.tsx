@@ -1,60 +1,25 @@
-"use client";
+import { strapi } from '@/lib/api/client';
+import { MapPageClient, Location } from '@/components/map';
 
-import { useState, useCallback } from "react";
-import { LocationMap, MapLocation } from "@/components/LocationMap";
-import { useCollection } from "@/lib/api/use-strapi";
+async function getFirstLocation(): Promise<Location | null> {
+  try {
+    const response = await strapi.collection('locations').find<Location>({
+      sort: 'createdAt:desc',
+      pagination: { pageSize: 1 },
+      populate: '*',
+    });
 
-type Location = {
-  id: number;
-  documentId: string;
-  name?: string;
-  mapData: MapLocation;
-};
-
-export default function Home() {
-  const {
-    data: locations,
-    isLoading,
-    isError,
-    refetch,
-  } = useCollection<Location>("locations", {
-    sort: "createdAt:desc",
-    pagination: { pageSize: 10 },
-    populate: "*",
-  });
-
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [mapKey, setMapKey] = useState(0);
-
-  const handleRefresh = useCallback(() => {
-    setIsRefreshing(true);
-    refetch();
-    // Small delay to allow refetch to complete before resetting map
-    setTimeout(() => {
-      setMapKey((prev) => prev + 1);
-      setIsRefreshing(false);
-    }, 500);
-  }, [refetch]);
-
-  const firstLocation = locations?.[0];
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 p-8 dark:bg-black">
-        <p className="text-black dark:text-white">Loading...</p>
-      </div>
-    );
+    return response.data[0] ?? null;
+  } catch (error) {
+    console.error('Failed to fetch location:', error);
+    return null;
   }
+}
 
-  if (isError) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 p-8 dark:bg-black">
-        <p className="text-red-500">Failed to load locations</p>
-      </div>
-    );
-  }
+export default async function Home() {
+  const location = await getFirstLocation();
 
-  if (!firstLocation?.mapData) {
+  if (!location?.mapData) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 p-8 dark:bg-black">
         <p className="text-black dark:text-white">No locations found</p>
@@ -62,27 +27,10 @@ export default function Home() {
     );
   }
 
-  return (
-    <div className="relative min-h-screen">
-      <LocationMap
-        key={mapKey}
-        location={firstLocation.mapData}
-        searchable
-        onRefresh={handleRefresh}
-        isRefreshing={isRefreshing}
-      />
+  async function refetchLocation(): Promise<Location | null> {
+    'use server';
+    return getFirstLocation();
+  }
 
-      {/* Location Info Overlay */}
-      <div className="absolute bottom-14 left-4 right-4 z-10 rounded-xl bg-white/95 p-4 shadow-lg backdrop-blur-sm dark:bg-black/90">
-        <h1 className="truncate text-lg font-semibold text-black dark:text-white">
-          {firstLocation.name || "Location"}
-        </h1>
-        {firstLocation.mapData.address && (
-          <p className="mt-1 truncate text-sm text-gray-600 dark:text-gray-400">
-            {firstLocation.mapData.address}
-          </p>
-        )}
-      </div>
-    </div>
-  );
+  return <MapPageClient initialLocation={location} onRefetch={refetchLocation} />;
 }
