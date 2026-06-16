@@ -10,7 +10,7 @@ import Map, {
 import 'mapbox-gl/dist/mapbox-gl.css';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useClickOutside, useDebouncedValue } from '@/hooks';
-import { MapLocation, SearchResult, LocationMapProps } from './types';
+import { MapLocation, SearchResult, LocationMapProps, MapMarker } from './types';
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || '';
 
@@ -76,6 +76,8 @@ export function LocationMap({
   onLocationChange,
   onRefresh,
   isRefreshing = false,
+  markers = [],
+  onMarkerSelect,
 }: Readonly<LocationMapProps>) {
   const mapRef = useRef<MapRef>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -422,6 +424,24 @@ export function LocationMap({
             onClick={onMarkerClick}
           />
         )}
+        {markers.map((marker) => (
+          <Marker
+            key={marker.id}
+            longitude={marker.longitude}
+            latitude={marker.latitude}
+            color="#FF3B30"
+            onClick={(e) => {
+              e.originalEvent.stopPropagation();
+              // Zoom to 0.5 mile radius (zoom ~14.5)
+              mapRef.current?.flyTo({
+                center: [marker.longitude, marker.latitude],
+                zoom: 14.5,
+                duration: 1000,
+              });
+              onMarkerSelect?.(marker);
+            }}
+          />
+        ))}
       </Map>
     </div>
   );

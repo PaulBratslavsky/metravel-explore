@@ -14,6 +14,14 @@ export type SearchResult = {
   place_type: string[];
 };
 
+export type MapMarker = {
+  id: string;
+  longitude: number;
+  latitude: number;
+  name: string;
+  address?: string;
+};
+
 export type LocationMapProps = {
   location: MapLocation;
   className?: string;
@@ -23,6 +31,8 @@ export type LocationMapProps = {
   onLocationChange?: (location: MapLocation) => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  markers?: MapMarker[];
+  onMarkerSelect?: (marker: MapMarker) => void;
 };
 
 export type Location = {

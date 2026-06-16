@@ -1,36 +1,28 @@
 import { strapi } from '@/lib/api/client';
 import { MapPageClient, Location } from '@/components/map';
 
-async function getFirstLocation(): Promise<Location | null> {
+async function getAllLocations(): Promise<Location[]> {
   try {
     const response = await strapi.collection('locations').find<Location>({
       sort: 'createdAt:desc',
-      pagination: { pageSize: 1 },
+      pagination: { pageSize: 100 },
       populate: '*',
     });
 
-    return response.data[0] ?? null;
+    return response.data ?? [];
   } catch (error) {
-    console.error('Failed to fetch location:', error);
-    return null;
+    console.error('Failed to fetch locations:', error);
+    return [];
   }
 }
 
 export default async function Home() {
-  const location = await getFirstLocation();
+  const locations = await getAllLocations();
 
-  if (!location?.mapData) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 p-8 dark:bg-black">
-        <p className="text-black dark:text-white">No locations found</p>
-      </div>
-    );
-  }
-
-  async function refetchLocation(): Promise<Location | null> {
+  async function refetchLocations(): Promise<Location[]> {
     'use server';
-    return getFirstLocation();
+    return getAllLocations();
   }
 
-  return <MapPageClient initialLocation={location} onRefetch={refetchLocation} />;
+  return <MapPageClient initialLocations={locations} onRefetch={refetchLocations} />;
 }
